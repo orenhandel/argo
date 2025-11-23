@@ -1,0 +1,90 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flink-job
+  namespace: java-tests
+  labels:
+    app: flink-job
+spec:
+  template:
+    metadata:
+      labels:
+        app: flink-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: flink
+        image: flink:1.18
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "Starting Flink batch job in local execution mode"
+            # Use local execution (embedded mode) - no cluster needed
+            java -cp /opt/flink/lib/*:/opt/flink/examples/streaming/WordCount.jar \
+              org.apache.flink.streaming.examples.wordcount.WordCount \
+              --input /opt/flink/README.txt \
+              --output /tmp/wordcount-output
+            
+            echo "Flink job completed successfully!"
+            echo "Output preview (first 20 lines):"
+            if [ -f /tmp/wordcount-output ]; then
+              head -20 /tmp/wordcount-output
+            else
+              echo "Checking for any output files..."
+              ls -la /tmp/wordcount-output* 2>/dev/null || echo "No output files found"
+            fi
+            
+            echo "Job finished, sleeping to keep container alive"
+            sleep 300
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        - name: FLINK_PROPERTIES
+          value: "jobmanager.memory.process.size: 512m\ntaskmanager.memory.process.size: 512m"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-deployment
+  namespace: java-tests
+  labels:
+    app: flink-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-deployment
+  template:
+    metadata:
+      labels:
+        app: flink-deployment
+    spec:
+      containers:
+      - name: flink-jobmanager
+        image: flink:1.18
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "Starting Flink JobManager in standalone mode"
+            # Start jobmanager and keep it running
+            /docker-entrypoint.sh jobmanager
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        - name: JVM_ARGS
+          value: "-Xms256m -Xmx512m -XX:+UseG1GC"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+

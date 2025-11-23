@@ -1,0 +1,205 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-collector
+  namespace: java-tests
+spec:
+  mode: deployment
+  config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+    
+    exporters:
+      # Export to stdout for demo purposes
+      debug:
+        verbosity: detailed
+    
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: java-tests
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector-collector
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+---
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: java-instrumentation
+  namespace: java-tests
+spec:
+  exporter:
+    endpoint: http://otel-collector:4318
+  propagators:
+    - tracecontext
+    - baggage
+  sampler:
+    type: parentbased_traceidratio
+    argument: "1.0"
+  java:
+    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:latest
+    env:
+      - name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://otel-collector:4318
+      - name: OTEL_TRACES_EXPORTER
+        value: otlp
+      - name: OTEL_METRICS_EXPORTER
+        value: otlp
+      - name: OTEL_LOGS_EXPORTER
+        value: otlp
+      - name: OTEL_SERVICE_NAME
+        value: java-otel-app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-otel-app
+  namespace: java-tests
+  labels:
+    app: java-otel-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-otel-app
+  template:
+    metadata:
+      labels:
+        app: java-otel-app
+      annotations:
+        instrumentation.opentelemetry.io/inject-java: "true"
+    spec:
+      containers:
+      - name: java-app
+        image: eclipse-temurin:17-jdk
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cat > OTelApp.java << 'EOF'
+            import java.util.ArrayList;
+            import java.util.List;
+            import java.util.Random;
+            import java.util.concurrent.TimeUnit;
+            
+            public class OTelApp {
+                private static final Random rand = new Random();
+                
+                public static void main(String[] args) throws Exception {
+                    List<byte[]> memory = new ArrayList<>();
+                    System.out.println("Java OTel-instrumented application started");
+                    System.out.println("Service: " + System.getenv("OTEL_SERVICE_NAME"));
+                    System.out.println("Exporter: " + System.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"));
+                    
+                    int iteration = 0;
+                    while (true) {
+                        iteration++;
+                        
+                        // Simulate different operations that will be traced
+                        performDatabaseQuery();
+                        performHttpRequest();
+                        processData(memory);
+                        
+                        Thread.sleep(5000);
+                        
+                        if (iteration % 6 == 0) {
+                            long usedMemory = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024*1024);
+                            System.out.println("Iteration: " + iteration + 
+                                             ", Memory: " + usedMemory + "MB" +
+                                             ", List size: " + memory.size() + "MB");
+                        }
+                    }
+                }
+                
+                private static void performDatabaseQuery() throws InterruptedException {
+                    // Simulate DB query
+                    Thread.sleep(rand.nextInt(50) + 10);
+                    double result = 0;
+                    for (int i = 0; i < 100000; i++) {
+                        result += Math.sqrt(rand.nextDouble());
+                    }
+                }
+                
+                private static void performHttpRequest() throws InterruptedException {
+                    // Simulate HTTP call
+                    Thread.sleep(rand.nextInt(30) + 5);
+                    double result = 0;
+                    for (int i = 0; i < 50000; i++) {
+                        result += Math.log(rand.nextDouble() + 1);
+                    }
+                }
+                
+                private static void processData(List<byte[]> memory) {
+                    // Simulate data processing
+                    memory.add(new byte[512 * 1024]); // 512KB
+                    if (memory.size() > 100) {
+                        memory.remove(0);
+                    }
+                    
+                    double result = 0;
+                    for (int i = 0; i < 200000; i++) {
+                        result += Math.sin(i) * Math.cos(i);
+                    }
+                }
+            }
+            EOF
+            
+            javac OTelApp.java
+            java -Xms128m -Xmx512m OTelApp
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "1"
+            memory: "768Mi"
+

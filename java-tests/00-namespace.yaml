@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: java-tests
+---
+apiVersion: v1
+data:
+  .dockerconfigjson: eyJhdXRocyI6eyJnaGNyLmlvIjp7InVzZXJuYW1lIjoib3JlbmhhbmRlbCIsInBhc3N3b3JkIjoiZ2hwX1RicWQ3TjRKdzh3YXJZcGRPU3BkU2N4M3lsZU9tcTJoYXEwaSIsImVtYWlsIjoib3JlbkBzY2FsZW9wcy5jb20iLCJhdXRoIjoiYjNKbGJtaGhibVJsYkRwbmFIQmZWR0p4WkRkT05FcDNPSGRoY2xsd1pFOVRjR1JUWTNnemVXeGxUMjF4TW1oaGNUQnAifX19
+kind: Secret
+metadata:
+  name: ghcr-secret
+  namespace: java-tests
+type: kubernetes.io/dockerconfigjson
+

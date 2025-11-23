@@ -1,0 +1,151 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark
+  namespace: java-tests
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-role
+  namespace: java-tests
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "persistentvolumeclaims", "events"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-rolebinding
+  namespace: java-tests
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: java-tests
+roleRef:
+  kind: Role
+  name: spark-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spark-job
+  namespace: java-tests
+  labels:
+    app: spark-job
+    spark-app-name: spark-pi-batch
+    spark-app: spark-pi-batch
+    spark-role: driver
+    spark-version: 3.5.0
+spec:
+  template:
+    metadata:
+      labels:
+        app: spark-job
+        spark-app-name: spark-pi-batch
+        spark-app: spark-pi-batch
+        spark-role: driver
+        spark-version: 3.5.0
+    spec:
+      serviceAccountName: spark
+      restartPolicy: OnFailure
+      containers:
+      - name: spark
+        image: apache/spark:3.5.0
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "Starting Spark batch job - will run repeatedly for 30 minutes"
+            
+            # Run Spark Pi calculation multiple times
+            ITERATIONS=12
+            for i in $(seq 1 $ITERATIONS); do
+              echo "=== Spark execution $i of $ITERATIONS ==="
+              /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --class org.apache.spark.examples.SparkPi \
+                --conf spark.app.name=spark-pi-batch-$i \
+                /opt/spark/examples/jars/spark-examples*.jar 100
+              
+              echo "Iteration $i completed, waiting before next run..."
+              sleep 120  # Wait 2 minutes between runs
+            done
+            
+            echo "All Spark iterations completed"
+            sleep 300  # Keep container alive for 5 more minutes
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        - name: SPARK_DRIVER_MEMORY
+          value: "512m"
+        - name: SPARK_EXECUTOR_MEMORY
+          value: "512m"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "768Mi"
+          limits:
+            cpu: "1"
+            memory: "1536Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-deployment
+  namespace: java-tests
+  labels:
+    app: spark-deployment
+    spark-app-name: spark-pi-continuous
+    spark-role: driver
+    spark-version: 3.5.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-deployment
+  template:
+    metadata:
+      labels:
+        app: spark-deployment
+        spark-app-name: spark-pi-continuous
+        spark-role: driver
+        spark-version: 3.5.0
+    spec:
+      serviceAccountName: spark
+      containers:
+      - name: spark-worker
+        image: apache/spark:3.5.0
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "Starting Spark worker in continuous mode"
+            while true; do
+              /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --class org.apache.spark.examples.SparkPi \
+                /opt/spark/examples/jars/spark-examples*.jar 50
+              echo "Spark calculation completed, waiting before next iteration..."
+              sleep 60
+            done
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        - name: SPARK_DRIVER_MEMORY
+          value: "512m"
+        - name: SPARK_EXECUTOR_MEMORY
+          value: "512m"
+        - name: SPARK_WORKER_MEMORY
+          value: "512m"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "768Mi"
+          limits:
+            cpu: "1"
+            memory: "1536Mi"
+

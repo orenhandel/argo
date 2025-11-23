@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-two-containers
+  namespace: java-tests
+  labels:
+    app: java-two-containers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-two-containers
+  template:
+    metadata:
+      labels:
+        app: java-two-containers
+    spec:
+      containers:
+      - name: java-container-1
+        image: eclipse-temurin:17-jdk
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cat > App1.java << 'EOF'
+            import java.util.ArrayList;
+            import java.util.List;
+            public class App1 {
+                public static void main(String[] args) throws Exception {
+                    List<byte[]> memory = new ArrayList<>();
+                    System.out.println("Java Container 1 started");
+                    while (true) {
+                        memory.add(new byte[512 * 1024]); // 512KB
+                        if (memory.size() > 50) {
+                            memory.remove(0);
+                        }
+                        // CPU work
+                        double result = 0;
+                        for (int i = 0; i < 500000; i++) {
+                            result += Math.sqrt(i);
+                        }
+                        Thread.sleep(3000);
+                        System.out.println("Container 1 - Memory: " + memory.size() * 0.5 + "MB");
+                    }
+                }
+            }
+            EOF
+            javac App1.java
+            java -Xms64m -Xmx256m -XX:+UseG1GC App1
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "384Mi"
+      - name: java-container-2
+        image: eclipse-temurin:17-jdk
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cat > App2.java << 'EOF'
+            import java.util.ArrayList;
+            import java.util.List;
+            import java.util.Random;
+            public class App2 {
+                public static void main(String[] args) throws Exception {
+                    List<byte[]> memory = new ArrayList<>();
+                    Random rand = new Random();
+                    System.out.println("Java Container 2 started");
+                    while (true) {
+                        memory.add(new byte[768 * 1024]); // 768KB
+                        if (memory.size() > 75) {
+                            memory.remove(0);
+                        }
+                        // Different CPU work pattern
+                        double result = 0;
+                        for (int i = 0; i < 750000; i++) {
+                            result += Math.log(rand.nextDouble() + 1);
+                        }
+                        Thread.sleep(4000);
+                        System.out.println("Container 2 - Memory: " + memory.size() * 0.75 + "MB");
+                    }
+                }
+            }
+            EOF
+            javac App2.java
+            java -Xms64m -Xmx384m -XX:+UseG1GC App2
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "192Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+

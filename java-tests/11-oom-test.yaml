@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-oom-test
+  namespace: java-tests
+  labels:
+    app: java-oom-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-oom-test
+  template:
+    metadata:
+      labels:
+        app: java-oom-test
+    spec:
+      containers:
+      - name: java-app
+        image: eclipse-temurin:17-jdk
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cat > OOMTestApp.java << 'EOF'
+            import java.nio.ByteBuffer;
+            import java.util.ArrayList;
+            import java.util.List;
+            
+            public class OOMTestApp {
+                public static void main(String[] args) throws Exception {
+                    List<ByteBuffer> buffers = new ArrayList<>();
+                    
+                    System.out.println("=== JVM OOM Test - DirectByteBuffer Allocation ===");
+                    System.out.println("Container Limit: 384Mi");
+                    System.out.println("Strategy: Allocate native memory via DirectByteBuffer");
+                    System.out.println("This bypasses JVM heap and triggers K8s OOMKill with exit code 137");
+                    System.out.println();
+                    
+                    int iteration = 0;
+                    int totalAllocated = 0;
+                    
+                    try {
+                        while (true) {
+                            iteration++;
+                            
+                            // Allocate 30MB of direct (native) memory
+                            // This is outside JVM heap but counted by K8s
+                            ByteBuffer buffer = ByteBuffer.allocateDirect(30 * 1024 * 1024);
+                            
+                            // Touch the memory to ensure it's allocated
+                            for (int i = 0; i < buffer.capacity(); i += 4096) {
+                                buffer.put(i, (byte) 1);
+                            }
+                            
+                            buffers.add(buffer);
+                            totalAllocated += 30;
+                            
+                            if (iteration % 2 == 0) {
+                                System.out.println("Iteration " + iteration + " | Total allocated: " + totalAllocated + "MB | Buffers: " + buffers.size());
+                            }
+                            
+                            // No sleep - allocate aggressively
+                        }
+                    } catch (OutOfMemoryError e) {
+                        System.err.println("!!! OutOfMemoryError at " + totalAllocated + "MB !!!");
+                        System.err.println("This means JVM caught it - K8s should have killed us first!");
+                        // Don't exit cleanly - let it crash or hang
+                        Thread.sleep(Long.MAX_VALUE);
+                    }
+                }
+            }
+            EOF
+            
+            javac OOMTestApp.java
+            # Use MaxDirectMemorySize to allow more native allocation than container limit
+            # K8s will kill the process when RSS exceeds 384Mi
+            java -Xms64m -Xmx128m -XX:MaxDirectMemorySize=512m -XX:+UseG1GC OOMTestApp
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "384Mi"  # Low limit to trigger OOMKill faster
+

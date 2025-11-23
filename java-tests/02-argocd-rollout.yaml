@@ -1,0 +1,71 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: java-rollout
+  namespace: java-tests
+  labels:
+    app: java-rollout
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: java-rollout
+  template:
+    metadata:
+      labels:
+        app: java-rollout
+    spec:
+      containers:
+      - name: java-app
+        image: eclipse-temurin:17-jdk
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cat > MemoryLoader.java << 'EOF'
+            import java.util.ArrayList;
+            import java.util.List;
+            import java.util.Random;
+            public class MemoryLoader {
+                public static void main(String[] args) throws Exception {
+                    List<byte[]> memory = new ArrayList<>();
+                    Random rand = new Random();
+                    System.out.println("Java Memory Loader started");
+                    while (true) {
+                        // Allocate some memory
+                        memory.add(new byte[1024 * 1024]); // 1MB
+                        if (memory.size() > 100) {
+                            memory.remove(0); // Keep around 100MB
+                        }
+                        // Simulate some CPU work
+                        double result = 0;
+                        for (int i = 0; i < 1000000; i++) {
+                            result += Math.sqrt(rand.nextDouble());
+                        }
+                        Thread.sleep(5000);
+                        System.out.println("Memory used: " + memory.size() + "MB, CPU work done: " + result);
+                    }
+                }
+            }
+            EOF
+            javac MemoryLoader.java
+            java -Xms128m -Xmx512m -XX:+UseG1GC MemoryLoader
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "1"
+            memory: "768Mi"
+  strategy:
+    canary:
+      steps:
+      - setWeight: 20
+      - pause: {duration: 30s}
+      - setWeight: 50
+      - pause: {duration: 30s}
+      - setWeight: 80
+      - pause: {duration: 30s}
+

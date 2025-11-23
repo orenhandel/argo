@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-mixed-containers
+  namespace: java-tests
+  labels:
+    app: java-mixed-containers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-mixed-containers
+  template:
+    metadata:
+      labels:
+        app: java-mixed-containers
+    spec:
+      containers:
+      - name: java-container
+        image: eclipse-temurin:17-jdk
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            cat > MixedApp.java << 'EOF'
+            import java.util.ArrayList;
+            import java.util.List;
+            public class MixedApp {
+                public static void main(String[] args) throws Exception {
+                    List<byte[]> memory = new ArrayList<>();
+                    System.out.println("Java container in mixed pod started");
+                    while (true) {
+                        memory.add(new byte[1024 * 1024]); // 1MB
+                        if (memory.size() > 80) {
+                            memory.remove(0);
+                        }
+                        // CPU work
+                        double result = 0;
+                        for (int i = 0; i < 1000000; i++) {
+                            result += Math.sin(i) * Math.cos(i);
+                        }
+                        Thread.sleep(5000);
+                        System.out.println("Java container - Memory: " + memory.size() + "MB, Work: " + result);
+                    }
+                }
+            }
+            EOF
+            javac MixedApp.java
+            java -Xms128m -Xmx512m -XX:+UseG1GC MixedApp
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=2
+        resources:
+          requests:
+            cpu: "150m"
+            memory: "256Mi"
+          limits:
+            cpu: "750m"
+            memory: "768Mi"
+      - name: nginx-container
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+          name: http
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+
